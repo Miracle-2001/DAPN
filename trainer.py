@@ -53,6 +53,9 @@ class DASS_processer(object):
 
         predict_loss_f = nn.CrossEntropyLoss()
         rec_loss_f = nn.MSELoss()
+        gen_loss_f = nn.CrossEntropyLoss()
+        sub_loss_f = nn.CrossEntropyLoss()
+
         # gen_loss_f = nn.CrossEntropyLoss()
         # sub_loss_f = nn.CrossEntropyLoss()
 
@@ -76,7 +79,7 @@ class DASS_processer(object):
             num_sample=X.shape[0]
             
             if mode == 'train':
-                sub_emb, gen_emb, rec_fea, loss_sub, loss_gen, emotion_predict = self.model(X,S,M,beta)
+                sub_emb, gen_emb, rec_fea, loss_sub, loss_gen, sub_pre, gen_pre, emotion_predict = self.model(X,S,M,beta)
                 # print(sub_emb.shape,gen_emb.shape,rec_fea.shape,sub_pre.shape,gen_pre.shape,emotion_predict.shape)
                 
                 predict_loss = predict_loss_f(
@@ -86,8 +89,14 @@ class DASS_processer(object):
                 norm_sub_emb=torch.norm(sub_emb,dim=1,p=2,keepdim=True)
                 norm_gen_emb=torch.norm(gen_emb,dim=1,p=2,keepdim=True)
                 orth_loss=L1_norm(torch.mul(sub_emb/norm_sub_emb,gen_emb/norm_gen_emb))/X.shape[0]
+                
+                # print(gen_pre,sub_pre,"SSSS",torch.Tensor(S.float()).long())
+                gen_loss=gen_loss_f(gen_pre.float(),torch.Tensor(S.float()).long().to(self.device))
+                sub_loss=sub_loss_f(sub_pre.float(),torch.Tensor(S.float()).long().to(self.device))
+                # print(gen_loss,sub_loss)
+                
                 Loss=self.co_p*predict_loss+self.co_r*rec_loss+\
-                     self.co_o*orth_loss+self.co_g*loss_gen+self.co_s*loss_sub
+                     self.co_o*orth_loss+self.co_g*(loss_gen+gen_loss)+self.co_s*(loss_sub+sub_loss) #both contrastive loss and crossentropy loss
             
                 self.optimizer.zero_grad()
                 Loss.backward()
@@ -117,8 +126,8 @@ class DASS_processer(object):
                 if mode == 'train':
                     epoch_loss['Orth_loss']+=orth_loss.item()
                     epoch_loss['Rec_loss']+=rec_loss.item()
-                    epoch_loss['Gen_loss']+=loss_gen.item()
-                    epoch_loss['Sub_loss']+=loss_sub.item()
+                    epoch_loss['Gen_loss']+=(loss_gen+gen_loss).item()
+                    epoch_loss['Sub_loss']+=(loss_sub+sub_loss).item()
             
             pbar.set_postfix({'acc':num_correct_predict/total_sample,'GL':epoch_loss['Gen_loss']/(total_sample/self.batch_size),'SL':epoch_loss['Sub_loss']/(total_sample/self.batch_size),
                               'OL':epoch_loss['Orth_loss']/(total_sample/self.batch_size),'RL':epoch_loss['Rec_loss']/(total_sample/self.batch_size),
@@ -160,6 +169,7 @@ class DASS_processer(object):
             self.optimizer = torch.optim.Adam(
                 self.model.parameters(), lr=lr, weight_decay=weight_decay)
         
+        
         best_acc = 0
         if early_stop is None:
             early_stop = num_epoch
@@ -185,8 +195,6 @@ class DASS_processer(object):
             
             valid_loader = DataLoader(
             dataset=valid_dataset, batch_size=batch_size, shuffle=False)
-        
-        
             train_metric, _,train_loss= self._do_epoch(train_loader, 'train', epoch)
             eval_metric, predictions,eval_loss= self._do_epoch(valid_loader, 'eval',epoch)
             
@@ -332,6 +340,8 @@ class DASS_pretrain_processer(object):
               early_stop=None,betas=[0.9,0.98],opt='Adam',
               save=False,save_fold=None,save_name=None
               ):
+        self.model.save_body(os.path.join(save_fold,save_name+'_'+str(44444)+'.pt'))
+        
         self.model.to(self.device)
         self.co_o=co_o
         self.co_r=co_r
@@ -339,6 +349,8 @@ class DASS_pretrain_processer(object):
         self.co_s=co_s
         self.batch_size=batch_size
         self.num_epoch=num_epoch
+        
+        self.model.save_body(os.path.join(save_fold,save_name+'_'+str(22222)+'.pt'))
         
         if opt=='SGD':
             self.optimizer = torch.optim.SGD(
