@@ -65,9 +65,8 @@ if __name__=='__main__':
             args.pre_load=False
         experiment.experiment['data_params']['pre_load']=args.pre_load
     
-    torch.manual_seed(args.randSeed)  # 为CPU设置随机种子
-    torch.cuda.manual_seed(args.randSeed)  # 为当前GPU设置随机种子
-    # if you are using multi-GPU，为所有GPU设置随机种子
+    torch.manual_seed(args.randSeed)  
+    torch.cuda.manual_seed(args.randSeed)  
     torch.cuda.manual_seed_all(args.randSeed)
     np.random.seed(args.randSeed)  # Numpy module.
     random.seed(args.randSeed)  # Python random module.
@@ -185,9 +184,7 @@ if __name__=='__main__':
         data_num=0
         total_acc=0
         # for fold, (training, validation, test) in enumerate(tqdm.tqdm(utils.get_lmoso_iterator(ds_name, ds))):
-        '''
-        fewshot时, 这里val和train直接反过来,之后容易处理。注意！
-        '''
+
         data_val, label_val, val_sub,val_sub_list,val_mask_list,\
         data_train, label_train, train_sub,train_sub_list,train_mask_list= data_prepare(
             original_data, sub_list, mask_list, args,experiment, fold=0,few_shot=True)
