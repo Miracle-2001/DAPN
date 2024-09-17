@@ -1,3 +1,4 @@
+# DASS:Disentangled Autoencoder Self-Supervised Learning for EEG Emotion Recognition
 import copy
 import tqdm
 import torch
@@ -9,7 +10,9 @@ from math import ceil
 from pathlib import Path
 from torch.nn.init import trunc_normal_ as __call_trunc_normal_
 
+
 tot = 0
+
 
 def kaiming_normal_(tensor):
     torch.nn.init.kaiming_normal_(
@@ -46,8 +49,8 @@ class conv_block(nn.Module):
             self.conv.add_module("conv-{}".format(p), nn.Sequential(
                 nn.Conv1d(dim, to_dim, 1,
                           stride=1, padding=0),
-                nn.Dropout(dropout),  
-                nn.BatchNorm1d(to_dim),  
+                nn.Dropout(dropout),  # changed from dropout2d to dropout1d
+                nn.BatchNorm1d(to_dim),  # BatchNorm1d or GroupNorm?
                 nn.GELU(),
             ))
             dim = to_dim
@@ -152,6 +155,7 @@ class DASS_body(nn.Module):
     def __init__(self, n_sub, n_channel, conv_hidden_dim, trans_hidden_dim, n_layer, heads,
                  gamma=0.1, dropout=0, layer_drop=0, init_std=0.1, init_method='xavier', mlp_layer=1):
         super(DASS_body, self).__init__()
+
         self.reconstruct_conv = conv_block(
             conv_hidden_dim, n_channel, layer=mlp_layer, dropout=0)  # or dropout=0??
         self.subject_encoder = DASS_encoder(n_channel, conv_hidden_dim, trans_hidden_dim, n_layer, heads,
@@ -160,10 +164,10 @@ class DASS_body(nn.Module):
                                             dropout, layer_drop, init_method, mlp_layer)
         self.init_std = init_std
         self.init_method = init_method
-        
+
+
     def forward(self, X, M):
         x_sub = self.subject_encoder(X, M)
-        # (batch_size,conv_hidden_dim,seq+1)
         x_gen = self.general_encoder(X, M)
         x_sub = x_sub.permute([1, 0, 2])
         x_gen = x_gen.permute([1, 0, 2])
@@ -185,6 +189,10 @@ class DASS_body(nn.Module):
         state_dict = torch.load(filename, map_location=lambda storage, loc: storage.cuda(
             device) if device is not None else None)
         self.load_state_dict(state_dict, strict=strict)
+        if freeze==True:
+            for param in self.parameters():
+                param.requires_grad = False
+        
 
 
 class DASS_module(nn.Module):
@@ -221,18 +229,23 @@ class DASS_module(nn.Module):
         eye = torch.eye(cross_mat.shape[0]).to(emb.device)
         S_add_dim = torch.unsqueeze(S, dim=0)
         equal = (S_add_dim == S_add_dim.t()).int().to(emb.device)
+
         pos = torch.sum(cross_mat*(equal-eye))
         neg = torch.sum(
             cross_mat*(torch.ones_like(cross_mat).to(emb.device)-equal))
+
         return -torch.log(pos/(pos+neg))
 
     def forward(self, X, S, M, alpha=0):  # (batch_size,channel,seq)
+
         if self.training:
             x_sub, x_gen, rec_fea = self.body(X, M)
             sub_emb = x_sub[:, :, 0]
             gen_emb = x_gen[:, :, 0]
+
             loss_sub = self._calc_contrastive_loss(sub_emb, S)
             loss_gen = self._calc_contrastive_loss(gen_emb, S)
+
             return sub_emb, gen_emb, rec_fea, loss_sub, ReverseLayerF.apply(loss_gen, alpha)
         else:
             x_sub, x_gen = self.body(X, M)
@@ -263,6 +276,9 @@ class DASS(nn.Module):
                                   gamma, dropout, layer_drop, init_std, init_method, mlp_layer, tau)
         self.predict_mlp = projection_mlp(
             2*conv_hidden_dim, n_class, mlp_layer, dropout)
+        self.sub_predict=projection_mlp(conv_hidden_dim,n_sub,mlp_layer,dropout)
+        self.gen_predict=projection_mlp(conv_hidden_dim,n_sub,mlp_layer,dropout)
+        
         self.gamma = gamma
         self.init_std = init_std
         self.init_method = init_method
@@ -286,7 +302,7 @@ class DASS(nn.Module):
 
     def load_DASS_m(self, encoder_file, freeze=False, strict=True, device=None):
         self.DASS_m.load(encoder_file, strict=strict, device=device)
-
+     
     def load_DASS_body(self, encoder_file, freeze=False, strict=True, device=None):
         self.DASS_m.body.load(encoder_file, freeze, strict, device=device)
 
@@ -294,9 +310,11 @@ class DASS(nn.Module):
         if self.training:
             sub_emb, gen_emb, rec_fea, loss_sub, loss_gen = self.DASS_m(
                 X, S, M, alpha)
+            sub_pre=self.sub_predict(sub_emb)
+            gen_pre=self.gen_predict(ReverseLayerF.apply(gen_emb, alpha))
             emotion_predict = self.predict_mlp(
                 torch.cat((sub_emb, gen_emb), 1))
-            return sub_emb, gen_emb, rec_fea, loss_sub, loss_gen, emotion_predict
+            return sub_emb, gen_emb, rec_fea, loss_sub, loss_gen, sub_pre,gen_pre, emotion_predict
         else:
             sub_emb, gen_emb = self.DASS_m(X, S, M)
             emotion_predict = self.predict_mlp(
